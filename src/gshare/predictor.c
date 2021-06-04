@@ -34,11 +34,22 @@ int verbose;
 //------------------------------------//
 
 //
-//TODO: Add your own Branch Predictor data structures here
+// Add your own Branch Predictor data structures here
 //
 uint32_t *table;
 uint32_t ghistory;
 uint32_t bitsmask;
+
+uint32_t pcbits;
+uint32_t ghistbits;
+
+void printBinaryValue(unsigned int num)
+{
+    if(!num) return;
+
+    printBinaryValue(num>>1);
+    putchar((((num&1) == 1) ? '1' : '0'));
+}
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -50,17 +61,20 @@ void
 init_predictor()
 {
   ghistory = 0;
+  pcbits = 0;
+  ghistbits = 0;
 
-  bitsmask = 1 << ghistoryBits; // 000100000
-  bitsmask = 1 - bitsmask; // 000011111
-
+  for (int i = 0; i < ghistoryBits; i++) {
+    bitsmask = bitsmask << 1 | 1;
+  }
+  
   // initialize global history table
-  size = 1 << ghistoryBits; // size = history bits * 2 bits per table entry
+  int size = 1 << ghistoryBits; // size = history bits * 2 bits per table entry
 
   switch(bpType) {
     case GSHARE:
       // calloc initializes table with zeros
-      table = (uint32_t*) calloc(size, sizeof(uint32_t))
+      table = (uint32_t*) calloc(size, sizeof(uint32_t));
   }
 }
 
@@ -72,7 +86,7 @@ uint8_t
 make_prediction(uint32_t pc)
 {
   //
-  //TODO: Implement prediction scheme
+  // Implement prediction scheme
   //
 
   // Make a prediction based on the bpType
@@ -86,13 +100,18 @@ make_prediction(uint32_t pc)
       ghistbits = ghistory & bitsmask;
 
       // compute table index and get prediction
-      tableidx = pcbits ^ ghistbits;
-      pred = table[tableidx]
+      int16_t tableidx = pcbits ^ ghistbits;
+      // setvbuf(stdout, NULL, _IONBF, 0);
+      // printf("tableidx = %d\n", tableidx);
+      // printf("pcbits = %x\n", pcbits);
+      // printf("ghistbits = %x\n", ghistbits);
+
+      uint32_t pred = table[tableidx];
 
       if(pred > 1)
         return TAKEN;
       else
-        return NOTTAKEN
+        return NOTTAKEN;
 
     case TOURNAMENT:
     case CUSTOM:
@@ -112,25 +131,35 @@ void
 train_predictor(uint32_t pc, uint8_t outcome)
 {
   //
-  //TODO: Implement Predictor training
+  // Implement Predictor training
   //
-
-  uint32_t pcbits;
-  uint32_t ghistbits;
+  pcbits = 0;
+  ghistbits = 0;
 
   switch(bpType) {
     case GSHARE:
+    
       // compute index
-      pcbits = pc & mask;
-      ghistbits = ghistory & mask;
-      tableidx = pcbits ^ ghistbits;
+      pcbits = pc & bitsmask;
+      ghistbits = ghistory & bitsmask;
+      int16_t tableidx = pcbits ^ ghistbits;
 
-      gbit = 0
+      // setvbuf(stdout, NULL, _IONBF, 0);
+      // printf("tableidx = %d\n", tableidx);
+      // printBinaryValue(pc);
+      // printf("\n");
+      // printBinaryValue(bitsmask);
+      // printf("\n");
+      // printBinaryValue(pcbits);
+      // printf("\n");
+
+      // tableidx = 0;
+      int gbit = 0;
 
       // update table counter
       if(outcome == TAKEN) {
         if(table[tableidx]<3) table[tableidx]++;
-        gbit = 1
+        gbit = 1;
       } else {
         if(table[tableidx]>0) table[tableidx]--;
       }
