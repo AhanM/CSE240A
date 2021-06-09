@@ -11,9 +11,9 @@
 //
 // TODO:Student Information
 //
-const char *studentName = "NAME";
-const char *studentID   = "PID";
-const char *email       = "EMAIL";
+const char *studentName = "Ahan Mukhopadhyay";
+const char *studentID   = "A13491660";
+const char *email       = "amukhopa@ucsd.edu";
 
 //------------------------------------//
 //      Predictor Configuration       //
@@ -34,9 +34,14 @@ int verbose;
 //------------------------------------//
 
 //
-//TODO: Add your own Branch Predictor data structures here
+// Add your own Branch Predictor data structures here
 //
+uint32_t *table; // gshare counter table
 
+uint32_t gHistory; // global history of branch outcomes
+
+uint32_t ghistmask; // mask for gHistory
+uint32_t pcmask; // mask for pc
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -48,8 +53,35 @@ void
 init_predictor()
 {
   //
-  //TODO: Initialize Branch Predictor Data Structures
+  // Initialize Branch Predictor Data Structures
   //
+
+  gHistory = 0;
+  int size = 0;
+
+  ghistmask = 0;
+  pcmask = 0;
+
+  switch(bpType) {
+    case GSHARE:
+
+      size = ghistoryBits << 1; // size = 2 * ghistoryBits
+      table = calloc(size, sizeof(uint32_t)); // init table with zeros
+
+      // init masks
+      for(int i = 0; i < ghistoryBits; i++) {
+        ghistmask = ghistmask << 1 | 1; // left shift and set LSB to 1
+      }
+
+      for(int i = 0; i < pcIndexBits; i++) {
+        pcmask = pcmask << 1 | 1;
+      }
+
+    case TOURNAMENT:
+    case CUSTOM:
+    default:
+      return;
+  }
 }
 
 // Make a prediction for conditional branch instruction at PC 'pc'
@@ -60,7 +92,7 @@ uint8_t
 make_prediction(uint32_t pc)
 {
   //
-  //TODO: Implement prediction scheme
+  // Implement prediction scheme
   //
 
   // Make a prediction based on the bpType
@@ -68,6 +100,24 @@ make_prediction(uint32_t pc)
     case STATIC:
       return TAKEN;
     case GSHARE:
+      // use masks to get important bits
+      uint32_t pcBits = pcmask & pc;
+      uint32_t ghistBits = ghistmask & gHistory;
+      
+      // xor to get gshare index
+      uint32_t gshareIdx = pcBits ^ ghistBits;
+
+      // get prediction from gshare table
+      uint32_t pred;
+      pred = table[gshareIdx];
+
+      // return TAKEN if MSB of 2-bit counter is 1
+      if((pred & 1) == 1) {
+        return TAKEN;
+      }
+
+      return NOTTAKEN;
+
     case TOURNAMENT:
     case CUSTOM:
     default:
@@ -86,6 +136,36 @@ void
 train_predictor(uint32_t pc, uint8_t outcome)
 {
   //
-  //TODO: Implement Predictor training
+  // Implement Predictor training
   //
+  switch (bpType) {
+    case STATIC:
+      return TAKEN;
+    case GSHARE:
+      // use masks to get important bits
+      uint32_t pcBits = pcmask & pc;
+      uint32_t ghistBits = ghistmask & gHistory;
+      
+      // xor to get gshare index
+      uint32_t gshareIdx = pcBits ^ ghistBits;
+
+      // update counter in gshare table
+      if (outcome == TAKEN) {
+        // if counter is not already max-ed out at 3
+        if(table[gshareIdx] < 3) 
+          table[gshareIdx] += 1;
+      } else {
+        // if counter is not already min-ed out at 0
+        if(table[gshareIdx > 0]) 
+          table[gshareIdx] -= 1;
+      }
+
+      // update ghistory bits with latest outcome
+      ghistory = (ghistory << 1) | outcome;
+      ghistory = ghistmask & ghistory;
+
+    case TOURNAMENT:
+    case CUSTOM:
+    default:
+      return;
 }
