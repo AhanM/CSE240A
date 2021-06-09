@@ -38,9 +38,15 @@ int verbose;
 //
 uint32_t *table; // gshare counter table
 
+uint32_t *choiceTable; // table to decide local vs global
+uint32_t *globalTable; // table for global 2-bit counters
+uint32_t *localTable; // table for local 2-bit counters
+uint32_t *localBranchTable; // local branch history table
+
 uint32_t gHistory; // global history of branch outcomes
 
-uint32_t ghistmask; // mask for gHistory
+uint32_t ghistmask; // mask for global history
+uint32_t lhistmask; // mask for local history
 uint32_t pcmask; // mask for pc
 
 //------------------------------------//
@@ -60,6 +66,7 @@ init_predictor()
   int size = 0;
 
   ghistmask = 0;
+  lhistmask = 0;
   pcmask = 0;
 
   switch(bpType) {
@@ -75,6 +82,36 @@ init_predictor()
       }
 
     case TOURNAMENT:
+
+      // init tables
+      size = ghistoryBits << 1; // size = (bits for counter = 2) * ghistoryBits
+      globalTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+      choiceTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      size = lhistoryBits << 1; // size = (bits for counter = 2) * lhistoryBits
+      localTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      size = pcIndexBits << 1;
+      localBranchTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      // init choice table to weakly favor global history
+      for(int i = 0; i < ghistoryBits; i++) {
+        choiceTable[i] = WT;
+      }
+
+      // init masks
+      for(int i = 0; i < ghistoryBits; i++) {
+        ghistmask = ghistmask << 1 | 1;
+      }
+
+      for(int i = 0; i < lhistoryBits; i++) {
+        lhistmask = lhistmask << 1 | 1;
+      }
+
+      for(int i = 0; i < pcIndexBits; i++) {
+        pcmask = pcmask << 1 | 1;
+      }
+
     case CUSTOM:
     default:
       return;
@@ -93,6 +130,7 @@ make_prediction(uint32_t pc)
   //
   uint32_t pcBits;
   uint32_t ghistBits;
+  uint32_t lhistBits;
 
   // Make a prediction based on the bpType
   switch (bpType) {
@@ -118,6 +156,28 @@ make_prediction(uint32_t pc)
       return NOTTAKEN;
 
     case TOURNAMENT:
+      // use masks to get important bits
+      pcBits = pcmask & pc;
+      ghistBits = ghistmask & ghistory;
+      lhistBits = lhistmask & localBranchTable[pcBits];
+
+      // find choice
+      choice = choiceTable[ghistBits];
+      uint32_t pred;
+
+      // if choice favors global history
+      if(choice == ST || choice == WT) {
+        pred = globalTable[ghistBits];
+      } else {
+        pred = localTable[lhistBits];
+      }
+
+      // return TAKEN if MSB of 2-bit counter is 1
+      if(pred == ST || pred == WT)
+        return TAKEN;
+      
+      return NOTTAKEN;
+
     case CUSTOM:
     default:
       break;
@@ -165,6 +225,53 @@ train_predictor(uint32_t pc, uint8_t outcome)
       gHistory = ghistmask & gHistory;
 
     case TOURNAMENT:
+      // use masks to get important bits
+      pcBits = pcmask & pc;
+      ghistBits = ghistmask & ghistory;
+      lhistBits = lhistmask & localBranchTable[pcBits];
+
+      // find choice and predictions
+      choice = choiceTable[ghistBits];
+      uint32_t globalPred;
+      uint32_t localPred;
+      
+      globalPred = globalTable[ghistBits];
+      localPred = localTable[lhistBits];
+
+      if(outcome == globalPred && outcome != localPred) {
+        // if choice isn't already max-ed at 3
+        if(choice != ST)
+          choiceTable[gHistBits] += 1; 
+      } else if(outcome != globalPred && outcome == localPred) {
+        // if choice isn't already min-ed at 0
+        if(choice != SN)
+          choiceTable[gHistBits] -= 1;
+      }
+
+      // update counter tables
+      if(outcome == TAKEN) {
+        if(globalPred != ST)
+          globalTable[ghistBits] += 1
+
+        if(localPred != ST)
+          localTable[locidx] += 1;
+      } else {
+        if(globalPred != SN)
+          globalTable[ghistBits] -= 1;
+        
+        if(localPred != SN)
+          localTable[locidx] -= 1;
+      }
+
+      // update global history and local branch table
+      gHistory = (gHistory << 1) | outcome;
+      gHistory = ghistmask & gHistory;
+
+      localBranchTable[locidx] = (localBranchTable[locidx] << 1) | outcome;
+      localBranchTable[locidx] = lhistmask & localBranchTable[locidx];
+
+      return;
+
     case CUSTOM:
     default:
       return;
