@@ -66,15 +66,12 @@ init_predictor()
     case GSHARE:
 
       size = ghistoryBits << 1; // size = 2 * ghistoryBits
-      table = calloc(size, sizeof(uint32_t)); // init table with zeros
+      table = (uint32_t*) calloc(size, sizeof(uint32_t)); // init table with zeros
 
       // init masks
       for(int i = 0; i < ghistoryBits; i++) {
         ghistmask = ghistmask << 1 | 1; // left shift and set LSB to 1
-      }
-
-      for(int i = 0; i < pcIndexBits; i++) {
-        pcmask = pcmask << 1 | 1;
+        pcmask = pcmask << 1 | 1; // gshare pc and ghist bits are equal length
       }
 
     case TOURNAMENT:
@@ -94,6 +91,8 @@ make_prediction(uint32_t pc)
   //
   // Implement prediction scheme
   //
+  uint32_t pcBits;
+  uint32_t ghistBits;
 
   // Make a prediction based on the bpType
   switch (bpType) {
@@ -101,18 +100,18 @@ make_prediction(uint32_t pc)
       return TAKEN;
     case GSHARE:
       // use masks to get important bits
-      uint32_t pcBits = pcmask & pc;
-      uint32_t ghistBits = ghistmask & gHistory;
+      pcBits = pcmask & pc;
+      ghistBits = ghistmask & gHistory;
       
       // xor to get gshare index
-      uint32_t gshareIdx = pcBits ^ ghistBits;
+      int16_t gshareIdx = pcBits ^ ghistBits;
 
       // get prediction from gshare table
       uint32_t pred;
       pred = table[gshareIdx];
 
       // return TAKEN if MSB of 2-bit counter is 1
-      if((pred & 1) == 1) {
+      if(pred == ST || pred == WT) {
         return TAKEN;
       }
 
@@ -138,16 +137,17 @@ train_predictor(uint32_t pc, uint8_t outcome)
   //
   // Implement Predictor training
   //
+  uint32_t pcBits;
+  uint32_t ghistBits;
+
   switch (bpType) {
-    case STATIC:
-      return TAKEN;
     case GSHARE:
       // use masks to get important bits
-      uint32_t pcBits = pcmask & pc;
-      uint32_t ghistBits = ghistmask & gHistory;
+      pcBits = pcmask & pc;
+      ghistBits = ghistmask & gHistory;
       
       // xor to get gshare index
-      uint32_t gshareIdx = pcBits ^ ghistBits;
+      int16_t gshareIdx = pcBits ^ ghistBits;
 
       // update counter in gshare table
       if (outcome == TAKEN) {
@@ -161,11 +161,12 @@ train_predictor(uint32_t pc, uint8_t outcome)
       }
 
       // update ghistory bits with latest outcome
-      ghistory = (ghistory << 1) | outcome;
-      ghistory = ghistmask & ghistory;
+      gHistory = (gHistory << 1) | outcome;
+      gHistory = ghistmask & gHistory;
 
     case TOURNAMENT:
     case CUSTOM:
     default:
       return;
+  }
 }
