@@ -69,9 +69,9 @@ init_predictor()
   lHistMask = 0;
   pcMask = 0;
 
-  ghistoryBits = 9;
-  lhistoryBits = 10;
-  pcIndexBits = 10;
+  ghistoryBits = 13;
+  lhistoryBits = 3;
+  pcIndexBits = 13;
 
   switch(bpType) {
     case CUSTOM:
@@ -130,16 +130,21 @@ make_prediction(uint32_t pc)
       ghistBits = gHistMask & gHistory;
       lhistBits = lHistMask & localBranchTable[pcBits];
 
+      // xor to get gshare index
+      int16_t gshareIdx = pcBits ^ ghistBits;
+
       // find choice
-      uint32_t choice = choiceTable[ghistBits];
+      uint32_t choice = choiceTable[gshareIdx];
       uint32_t pred;
 
       // if choice favors global history
-      if(choice == ST || choice == WT) {
-        pred = globalTable[ghistBits];
-      } else {
+      if (choice == WN){
         pred = localTable[lhistBits];
+      } else {
+        pred = globalTable[gshareIdx];
       }
+
+      // pred = globalTable[gshareIdx];
 
       // return TAKEN if MSB of 2-bit counter is 1
       if(pred == ST || pred == WT)
@@ -175,34 +180,37 @@ train_predictor(uint32_t pc, uint8_t outcome)
       ghistBits = gHistMask & gHistory;
       lhistBits = lHistMask & localBranchTable[pcBits];
 
+      // xor to get gshare index
+      int16_t gshareIdx = pcBits ^ ghistBits;
+
       // find choice and predictions
-      uint32_t choice = choiceTable[ghistBits];
+      uint32_t choice = choiceTable[gshareIdx];
       uint32_t globalPred;
       uint32_t localPred;
       
-      globalPred = globalTable[ghistBits];
+      globalPred = globalTable[gshareIdx];
       localPred = localTable[lhistBits];
 
       if(outcome == globalPred && outcome != localPred) {
         // if choice isn't already max-ed at 3
         if(choice != ST)
-          choiceTable[ghistBits] += 1; 
+          choiceTable[gshareIdx] += 1; 
       } else if(outcome != globalPred && outcome == localPred) {
         // if choice isn't already min-ed at 0
         if(choice != SN)
-          choiceTable[ghistBits] -= 1;
+          choiceTable[gshareIdx] -= 1;
       }
 
       // update counter tables
       if(outcome == TAKEN) {
         if(globalPred != ST)
-          globalTable[ghistBits] += 1;
+          globalTable[gshareIdx] += 1;
 
         if(localPred != ST)
           localTable[lhistBits] += 1;
       } else {
         if(globalPred != SN)
-          globalTable[ghistBits] -= 1;
+          globalTable[gshareIdx] -= 1;
         
         if(localPred != SN)
           localTable[lhistBits] -= 1;
