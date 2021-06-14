@@ -28,7 +28,6 @@ int lhistoryBits; // Number of bits used for Local History
 int pcIndexBits;  // Number of bits used for PC index
 int bpType;       // Branch Prediction Type
 int verbose;
-int globalIndexer;
 
 //------------------------------------//
 //      Predictor Data Structures     //
@@ -37,15 +36,18 @@ int globalIndexer;
 //
 // Add your own Branch Predictor data structures here
 //
-uint32_t *table;
+uint32_t *choiceTable; // choosing between global vs local table
+uint32_t *globalTable; // global counter table
+uint32_t *localTable; // local counter table
+uint32_t *localBranchTable; // local branch history table
+
 uint32_t gHistory;
-
 uint32_t pcbits;
-uint32_t ghistbits;
 
-uint32_t ghistmask; // mask for global history
-uint32_t lhistmask; // mask for local history
-uint32_t pcmask; // mask for pc
+uint32_t pcMask;
+uint32_t gHistMask;
+uint32_t lHistMask;
+
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -63,31 +65,47 @@ init_predictor()
   gHistory = 0;
   int size = 0;
 
-  ghistmask = 0;
-  lhistmask = 0;
-  pcmask = 0;
+  gHistMask = 0;
+  lHistMask = 0;
+  pcMask = 0;
 
-  globalIndexer = 0;
-
-  ghistoryBits = 13;
+  ghistoryBits = 9;
+  lhistoryBits = 10;
+  pcIndexBits = 10;
 
   switch(bpType) {
-    case GSHARE: break;
-    case TOURNAMENT: break;
     case CUSTOM:
-      size = ghistoryBits << 1; // size = 2 * ghistoryBits
-      table = (uint32_t*) calloc(size, sizeof(uint32_t)); // init table with zeros
+
+      // init tables
+      size = ghistoryBits << 1; // size = (bits for counter = 2) * ghistoryBits
+      globalTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+      choiceTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      size = lhistoryBits << 1; // size = (bits for counter = 2) * lhistoryBits
+      localTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      size = pcIndexBits << 1;
+      localBranchTable = (uint32_t*) calloc(size, sizeof(uint32_t));
+
+      // init choice table to weakly favor global history
+      for(int i = 0; i < ghistoryBits; i++) {
+        choiceTable[i] = WT;
+      }
 
       // init masks
       for(int i = 0; i < ghistoryBits; i++) {
-        ghistmask = ghistmask << 1 | 1; // left shift and set LSB to 1
-        pcmask = pcmask << 1 | 1; // gshare pc and ghist bits are equal length
+        gHistMask = gHistMask << 1 | 1;
       }
-      break;
-    default:
-      return;
+
+      for(int i = 0; i < lhistoryBits; i++) {
+        lHistMask = lHistMask << 1 | 1;
+      }
+
+      for(int i = 0; i < pcIndexBits; i++) {
+        pcMask = pcMask << 1 | 1;
+      }
+    default: return;
   }
-  
 }
 
 // Make a prediction for conditional branch instruction at PC 'pc'
@@ -106,33 +124,30 @@ make_prediction(uint32_t pc)
 
   // Make a prediction based on the bpType
   switch (bpType) {
-    case STATIC: return TAKEN;
-    case GSHARE: return TAKEN;
-    case TOURNAMENT: return TAKEN;
     case CUSTOM:
       // use masks to get important bits
-      pcBits = pcmask & pc;
-      ghistBits = ghistmask & gHistory;
-      
-      // xor to get gshare index
-      int16_t gshareIdx = pcBits ^ ghistBits;
+      pcBits = pcMask & pc;
+      ghistBits = gHistMask & gHistory;
+      lhistBits = lHistMask & localBranchTable[pcBits];
 
-      // get prediction from gshare table
+      // find choice
+      uint32_t choice = choiceTable[ghistBits];
       uint32_t pred;
-      pred = table[gshareIdx];
 
-      if(globalIndexer < 1000) {
-        return NOTTAKEN;
+      // if choice favors global history
+      if(choice == ST || choice == WT) {
+        pred = globalTable[ghistBits];
+      } else {
+        pred = localTable[lhistBits];
       }
-      globalIndexer++;
 
       // return TAKEN if MSB of 2-bit counter is 1
-      if(pred == ST || pred == WT) {
+      if(pred == ST || pred == WT)
         return TAKEN;
-      }
-
+      
       return NOTTAKEN;
-    default: return TAKEN;
+
+    default: break;
   }
 
   // If there is not a compatable bpType then return NOTTAKEN
@@ -151,34 +166,57 @@ train_predictor(uint32_t pc, uint8_t outcome)
   //
   uint32_t pcBits;
   uint32_t ghistBits;
+  uint32_t lhistBits;
 
   switch (bpType) {
-    case GSHARE: break;
-    case TOURNAMENT: break;
     case CUSTOM:
       // use masks to get important bits
-      pcBits = pcmask & pc;
-      ghistBits = ghistmask & gHistory;
-      
-      // xor to get gshare index
-      int16_t gshareIdx = pcBits ^ ghistBits;
+      pcBits = pcMask & pc;
+      ghistBits = gHistMask & gHistory;
+      lhistBits = lHistMask & localBranchTable[pcBits];
 
-      // update counter in gshare table
-      if (outcome == TAKEN) {
-        // if counter is not already max-ed out at 3
-        if(table[gshareIdx] < 3) 
-          table[gshareIdx] += 1;
-      } else {
-        // if counter is not already min-ed out at 0
-        if(table[gshareIdx > 0]) 
-          table[gshareIdx] -= 1;
+      // find choice and predictions
+      uint32_t choice = choiceTable[ghistBits];
+      uint32_t globalPred;
+      uint32_t localPred;
+      
+      globalPred = globalTable[ghistBits];
+      localPred = localTable[lhistBits];
+
+      if(outcome == globalPred && outcome != localPred) {
+        // if choice isn't already max-ed at 3
+        if(choice != ST)
+          choiceTable[ghistBits] += 1; 
+      } else if(outcome != globalPred && outcome == localPred) {
+        // if choice isn't already min-ed at 0
+        if(choice != SN)
+          choiceTable[ghistBits] -= 1;
       }
 
-      // update ghistory bits with latest outcome
+      // update counter tables
+      if(outcome == TAKEN) {
+        if(globalPred != ST)
+          globalTable[ghistBits] += 1;
+
+        if(localPred != ST)
+          localTable[lhistBits] += 1;
+      } else {
+        if(globalPred != SN)
+          globalTable[ghistBits] -= 1;
+        
+        if(localPred != SN)
+          localTable[lhistBits] -= 1;
+      }
+
+      // update global history and local branch table
       gHistory = (gHistory << 1) | outcome;
-      gHistory = ghistmask & gHistory;
-      break;
-    default:
+      gHistory = gHistMask & gHistory;
+
+      localBranchTable[lhistBits] = (localBranchTable[lhistBits] << 1) | outcome;
+      localBranchTable[lhistBits] = lHistMask & localBranchTable[lhistBits];
+
       return;
+
+    default: return;
   }
 }
